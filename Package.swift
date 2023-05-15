@@ -4,6 +4,8 @@
 import PackageDescription
 import Foundation
 
+var magic = true
+
 var allSources = false
 if ProcessInfo.processInfo.environment["ALL_SOURCES"] == "1" {
 	allSources = true
@@ -21,6 +23,24 @@ var package = Package(
 	targets: [appTarget]
 )
 
+print("...")
+
+func getCommitSHA(for dir: String) -> String? {
+    let process = Process()
+    let pipe = Pipe()
+
+    let currentDir = URL(fileURLWithPath: #file).deletingLastPathComponent().path
+    process.currentDirectoryPath = currentDir
+    process.launchPath = "/usr/bin/env"
+    process.arguments = ["git", "log", "--pretty=format:%H", "-1", "--", dir]
+    process.standardOutput = pipe
+    process.launch()
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    return output
+}
 
 func add(module name: String, dependencies: [String] = []) {
 	var binary = true
@@ -33,9 +53,16 @@ func add(module name: String, dependencies: [String] = []) {
 		}
 	}
 
-	if binary {
-		print("binary – \(name)")
-		package.targets.append(.binaryTarget(name: name, path: name + "/" + name + ".xcframework"))
+    let sha = getCommitSHA(for: name)
+    if binary && sha == nil && magic == false {
+        print("Missing xcframework for \(name) at \(sha). Fallback to sources. Update cache using update_cache.py")
+    }
+
+	if binary, magic == true {
+        package.targets.append(.binaryTarget(name: name, path: name + "/" + name + ".xcframework"))
+    } else if binary, let sha {
+        print("binary – \(name) – sha: \(sha)")
+        package.targets.append(.binaryTarget(name: name, path: "binaries/\(sha)/\(name).xcframework"))
 	} else {
 		print("sources – \(name)")
 		let target: PackageDescription.Target = .target(name: name, dependencies: [], path: name + "/Sources")
@@ -58,8 +85,11 @@ add(module: "payments", dependencies: ["networking"])
 add(module: "messenger", dependencies: ["networking", "payments"])
 
 
-let currentDir = URL(fileURLWithPath: #file).deletingLastPathComponent().path
-// при изменении sources должен тригерится git clone, поэтому путь до репо содержит "чексумму" массива sources
-let sourcesString = sources.joined(separator: "_")
-print("git://localhost:12345/\(currentDir)/__dummy__\(sourcesString)")
-package.dependencies.append(.package(url: "git://localhost:12345/\(currentDir)/__dummy__\(sourcesString)", branch: "master"))
+if ProcessInfo.processInfo.environment["NO_MAGIC"] == "1" { magic = false }
+if magic {
+	let currentDir = URL(fileURLWithPath: #file).deletingLastPathComponent().path
+	// при изменении sources должен тригерится git clone, поэтому путь до репо содержит "чексумму" массива sources
+	let sourcesString = sources.joined(separator: "_")
+	print("git://localhost:12345/\(currentDir)/__dummy__\(sourcesString)")
+	package.dependencies.append(.package(url: "git://localhost:12345/\(currentDir)/__dummy__\(sourcesString)", branch: "master"))
+}
